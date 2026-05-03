@@ -190,6 +190,59 @@ SELECT
 FROM students;
 
 -- =====================================================
+-- 9. SAFE MIGRATION FOR EXISTING PROJECTS
+-- =====================================================
+/*
+Run this block once on existing databases that still have `course`
+and/or non-normalized `parent_phone` values.
+*/
+/*
+BEGIN;
+
+ALTER TABLE students
+ADD COLUMN IF NOT EXISTS year_of_joining DATE;
+
+UPDATE students
+SET year_of_joining = COALESCE(year_of_joining, CURRENT_DATE);
+
+ALTER TABLE students
+ALTER COLUMN year_of_joining SET NOT NULL;
+
+DROP INDEX IF EXISTS idx_students_course;
+DROP VIEW IF EXISTS user_student_view;
+DROP VIEW IF EXISTS student_view;
+
+ALTER TABLE students
+DROP COLUMN IF EXISTS course;
+
+-- Normalize parent phone to +91XXXXXXXXXX using last 10 digits
+UPDATE students
+SET parent_phone = CASE
+    WHEN parent_phone IS NULL OR parent_phone = '' THEN NULL
+    ELSE '+91' || RIGHT(REGEXP_REPLACE(parent_phone, '\D', '', 'g'), 10)
+END;
+
+CREATE INDEX IF NOT EXISTS idx_students_year_of_joining
+ON students(year_of_joining);
+
+CREATE OR REPLACE VIEW student_view AS
+SELECT
+    id,
+    register_no,
+    name,
+    year_of_joining,
+    class,
+    section,
+    parent_phone,
+    parent_email,
+    enrollment_date,
+    updated_at
+FROM students;
+
+COMMIT;
+*/
+
+-- =====================================================
 -- NOTES FOR MIGRATION
 -- =====================================================
 /*
