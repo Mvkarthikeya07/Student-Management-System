@@ -1,6 +1,7 @@
 ﻿"""Database module for Supabase-backed Student Information System."""
 
 import os
+import re
 from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
@@ -8,6 +9,31 @@ from supabase import Client, create_client
 from werkzeug.security import check_password_hash, generate_password_hash
 
 load_dotenv()
+
+def _hash_password(password: str) -> str:
+    """Create a standard PBKDF2 password hash."""
+    return generate_password_hash(password, method="pbkdf2:sha256", salt_length=16)
+
+
+def _verify_password(stored_hash: str, password: str) -> bool:
+    """Verify password using standard hash verification."""
+    if not stored_hash:
+        return False
+    return check_password_hash(stored_hash, password)
+
+
+def _normalize_indian_phone(phone: str) -> str:
+    """Normalize to +91XXXXXXXXXX and validate exactly 10 local digits."""
+    raw = (phone or "").strip()
+    digits = re.sub(r"\D", "", raw)
+
+    if digits.startswith("91") and len(digits) == 12:
+        digits = digits[2:]
+
+    if len(digits) != 10:
+        raise ValueError("Parent phone must be exactly 10 digits")
+
+    return f"+91{digits}"
 
 
 class SupabaseConfig:
@@ -43,7 +69,7 @@ class DatabaseOps:
     def create_user(self, username: str, password: str, email: str, role: str, security_question: str, security_answer: str):
         data = {
             "username": username,
-            "password": generate_password_hash(password),
+            "password": _hash_password(password),
             "email": email,
             "role": role,
             "security_question": security_question,
@@ -58,38 +84,37 @@ class DatabaseOps:
 
     def verify_user_password(self, username: str, password: str):
         user = self.get_user_by_username(username)
-        if user and check_password_hash(user["password"], password):
+        if user and _verify_password(user["password"], password):
             return user
         return None
 
     def update_user_password(self, username: str, new_password: str):
-        hashed_password = generate_password_hash(new_password)
+        hashed_password = _hash_password(new_password)
         response = self.client.table("users").update({"password": hashed_password}).eq("username", username).execute()
         return response.data
 
     def create_student(
         self,
+        register_no: str,
         name: str,
-        course: str,
+        year_of_joining: str,
         class_name: str,
         section: str,
         parent_phone: str,
         parent_email: str,
-        user_id: str = None,
         **kwargs,
     ):
         # Allow callers that pass class="..." from forms or seed dictionaries.
         resolved_class = class_name if class_name is not None else kwargs.get("class")
         data = {
+            "register_no": register_no,
             "name": name,
-            "course": course,
+            "year_of_joining": year_of_joining,
             "class": resolved_class,
             "section": section,
-            "parent_phone": parent_phone,
+            "parent_phone": _normalize_indian_phone(parent_phone),
             "parent_email": parent_email,
         }
-        if user_id:
-            data["user_id"] = user_id
         response = self.client.table("students").insert(data).execute()
         return response.data
 
@@ -104,18 +129,25 @@ class DatabaseOps:
             student
             for student in all_students
             if (
-                keyword_lower in student.get("name", "").lower()
-                or keyword_lower in student.get("course", "").lower()
+                keyword_lower in student.get("register_no", "").lower()
+                or keyword_lower in student.get("name", "").lower()
+                or keyword_lower in str(student.get("year_of_joining", "")).lower()
                 or keyword_lower in student.get("class", "").lower()
                 or keyword_lower in student.get("section", "").lower()
             )
         ]
+
+    def get_student_by_register_no(self, register_no: str):
+        response = self.client.table("students").select("*").eq("register_no", register_no).execute()
+        return response.data[0] if response.data else None
 
     def get_student_by_id(self, student_id: str):
         response = self.client.table("students").select("*").eq("id", student_id).execute()
         return response.data[0] if response.data else None
 
     def update_student(self, student_id: str, **kwargs):
+        if "parent_phone" in kwargs:
+            kwargs["parent_phone"] = _normalize_indian_phone(kwargs["parent_phone"])
         response = self.client.table("students").update(kwargs).eq("id", student_id).execute()
         return response.data
 
@@ -183,47 +215,60 @@ def seed_default_data() -> bool:
     if len(db.get_all_students()) == 0:
         sample_students = [
             {
+                "register_no": "REG001",
                 "name": "Raj Kumar",
-                "course": "B.Tech",
+                "year_of_joining": "2023-06-01",
                 "class": "II Year",
                 "section": "A",
-                "parent_phone": "9876543210",
+                "parent_phone": "+919876543210",
                 "parent_email": "parent1@example.com",
             },
             {
+                "register_no": "REG002",
                 "name": "Priya Singh",
-                "course": "B.Tech",
+                "year_of_joining": "2023-06-01",
                 "class": "II Year",
                 "section": "B",
-                "parent_phone": "9876543211",
+                "parent_phone": "+919876543211",
                 "parent_email": "parent2@example.com",
             },
             {
+                "register_no": "REG003",
                 "name": "Amit Patel",
-                "course": "B.Com",
+                "year_of_joining": "2024-06-01",
                 "class": "I Year",
                 "section": "A",
-                "parent_phone": "9876543212",
+                "parent_phone": "+919876543212",
                 "parent_email": "parent3@example.com",
             },
             {
+                "register_no": "REG004",
                 "name": "Neha Verma",
-                "course": "B.Tech",
+                "year_of_joining": "2022-06-01",
                 "class": "III Year",
                 "section": "C",
-                "parent_phone": "9876543213",
+                "parent_phone": "+919876543213",
                 "parent_email": "parent4@example.com",
             },
             {
+                "register_no": "REG005",
                 "name": "Arun Kumar",
-                "course": "B.Sc",
+                "year_of_joining": "2024-06-01",
                 "class": "I Year",
                 "section": "B",
-                "parent_phone": "9876543214",
+                "parent_phone": "+919876543214",
                 "parent_email": "parent5@example.com",
             },
         ]
         for student in sample_students:
-            db.create_student(**student)
+            db.create_student(
+                register_no=student["register_no"],
+                name=student["name"],
+                year_of_joining=student["year_of_joining"],
+                class_name=student["class"],
+                section=student["section"],
+                parent_phone=student["parent_phone"],
+                parent_email=student["parent_email"],
+            )
 
     return True

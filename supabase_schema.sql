@@ -32,9 +32,9 @@ CREATE INDEX idx_users_role ON users(role);
 -- =====================================================
 CREATE TABLE IF NOT EXISTS students (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    register_no TEXT UNIQUE NOT NULL,
     name TEXT NOT NULL,
-    course TEXT NOT NULL,
+    year_of_joining DATE NOT NULL,
     class TEXT NOT NULL,
     section TEXT NOT NULL,
     parent_phone TEXT,
@@ -44,9 +44,9 @@ CREATE TABLE IF NOT EXISTS students (
 );
 
 -- Create indexes for search functionality
-CREATE INDEX idx_students_user_id ON students(user_id);
+CREATE INDEX idx_students_register_no ON students(register_no);
 CREATE INDEX idx_students_name ON students(name);
-CREATE INDEX idx_students_course ON students(course);
+CREATE INDEX idx_students_year_of_joining ON students(year_of_joining);
 CREATE INDEX idx_students_class ON students(class);
 CREATE INDEX idx_students_section ON students(section);
 
@@ -142,11 +142,11 @@ VALUES
 ON CONFLICT (username) DO NOTHING;
 
 -- Insert sample students
-INSERT INTO students (name, course, class, section, parent_phone, parent_email)
+INSERT INTO students (register_no, name, year_of_joining, class, section, parent_phone, parent_email)
 VALUES 
-    ('Raj Kumar', 'B.Tech', 'II Year', 'A', '9876543210', 'parent1@example.com'),
-    ('Priya Singh', 'B.Tech', 'II Year', 'B', '9876543211', 'parent2@example.com'),
-    ('Amit Patel', 'B.Com', 'I Year', 'A', '9876543212', 'parent3@example.com')
+    ('REG001', 'Raj Kumar', '2023-06-01', 'II Year', 'A', '+919876543210', 'parent1@example.com'),
+    ('REG002', 'Priya Singh', '2023-06-01', 'II Year', 'B', '+919876543211', 'parent2@example.com'),
+    ('REG003', 'Amit Patel', '2024-06-01', 'I Year', 'A', '+919876543212', 'parent3@example.com')
 ON CONFLICT DO NOTHING;
 
 -- =====================================================
@@ -174,22 +174,20 @@ CREATE TRIGGER update_students_updated_at BEFORE UPDATE ON students
 -- 8. VIEWS FOR COMMON QUERIES
 -- =====================================================
 
--- View for getting user with student details
-CREATE OR REPLACE VIEW user_student_view AS
-SELECT 
-    u.id,
-    u.username,
-    u.email,
-    u.role,
-    s.name,
-    s.course,
-    s.class,
-    s.section,
-    s.parent_phone,
-    s.parent_email
-FROM users u
-LEFT JOIN students s ON u.id = s.user_id
-WHERE u.is_active = TRUE;
+-- View for getting student details
+CREATE OR REPLACE VIEW student_view AS
+SELECT
+    id,
+    register_no,
+    name,
+    year_of_joining,
+    class,
+    section,
+    parent_phone,
+    parent_email,
+    enrollment_date,
+    updated_at
+FROM students;
 
 -- =====================================================
 -- NOTES FOR MIGRATION

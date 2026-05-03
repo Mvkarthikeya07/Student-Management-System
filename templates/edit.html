@@ -13,12 +13,16 @@
             <form method="POST">
                 <div class="row">
                     <div class="col-md-6 mb-3">
+                        <label class="form-label">Register No</label>
+                        <input type="text" name="register_no" class="form-control" value="{{ student.register_no }}" required>
+                    </div>
+                    <div class="col-md-6 mb-3">
                         <label class="form-label">Name</label>
                         <input type="text" name="name" class="form-control" value="{{ student.name }}" required>
                     </div>
                     <div class="col-md-6 mb-3">
-                        <label class="form-label">Course</label>
-                        <input type="text" name="course" class="form-control" value="{{ student.course }}" required>
+                        <label class="form-label">Year of Joining</label>
+                        <input type="date" name="year_of_joining" class="form-control" value="{{ student.year_of_joining }}" required>
                     </div>
                 </div>
                 
@@ -36,7 +40,7 @@
                 <div class="row">
                     <div class="col-md-6 mb-3">
                         <label class="form-label">Parent Phone</label>
-                        <input type="tel" name="parent_phone" class="form-control" value="{{ student.parent_phone }}" required>
+                        <input type="tel" name="parent_phone" class="form-control" value="{{ student.parent_phone | replace('+91', '') }}" pattern="[0-9]{10}" maxlength="10" required>
                     </div>
                     <div class="col-md-6 mb-3">
                         <label class="form-label">Parent Email</label>

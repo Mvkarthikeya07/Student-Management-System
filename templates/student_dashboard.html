@@ -22,8 +22,9 @@
                     <thead class="table-primary">
                         <tr>
                             <th>ID</th>
+                            <th>Register No</th>
                             <th>Name</th>
-                            <th>Course</th>
+                            <th>Year of Joining</th>
                             <th>Class</th>
                             <th>Section</th>
                             <th>Parent Phone</th>
@@ -34,8 +35,9 @@
                         {% for student in students %}
                         <tr>
                             <td>{{ student.id }}</td>
+                            <td>{{ student.register_no }}</td>
                             <td>{{ student.name }}</td>
-                            <td>{{ student.course }}</td>
+                            <td>{{ student.year_of_joining }}</td>
                             <td>{{ student["class"] }}</td>
                             <td>{{ student.section }}</td>
                             <td>{{ student.parent_phone }}</td>

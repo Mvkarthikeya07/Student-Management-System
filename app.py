@@ -39,7 +39,7 @@ def home():
 def login():
     error = None
     if request.method == "POST":
-        username = request.form["username"]
+        username = request.form["username"].strip()
         password = request.form["password"]
 
         # Use Supabase for authentication
@@ -64,7 +64,7 @@ def create_account():
     error = None
     success = None
     if request.method == "POST":
-        username = request.form["username"]
+        username = request.form["username"].strip()
         password = request.form["password"]
         confirm_password = request.form["confirm_password"]
         email = request.form["email"]
@@ -118,14 +118,22 @@ def add_student():
     if "role" not in session or session["role"] != "teacher":
         return redirect(url_for("login"))
 
+    register_no = request.form["register_no"].strip()
     name = request.form["name"]
-    course = request.form["course"]
+    year_of_joining = request.form["year_of_joining"]
     class_name = request.form["class"]
     section = request.form["section"]
     parent_phone = request.form["parent_phone"]
     parent_email = request.form["parent_email"]
     
-    db.create_student(name, course, class_name, section, parent_phone, parent_email)
+    existing = db.get_student_by_register_no(register_no)
+    if existing:
+        return redirect(url_for("teacher_dashboard"))
+
+    try:
+        db.create_student(register_no, name, year_of_joining, class_name, section, parent_phone, parent_email)
+    except ValueError:
+        return redirect(url_for("teacher_dashboard"))
     return redirect(url_for("teacher_dashboard"))
 
 @app.route("/edit/<student_id>", methods=["GET", "POST"])
@@ -135,14 +143,22 @@ def edit_student(student_id):
 
     if request.method == "POST":
         update_data = {
+            "register_no": request.form["register_no"].strip(),
             "name": request.form["name"],
-            "course": request.form["course"],
+            "year_of_joining": request.form["year_of_joining"],
             "class": request.form["class"],
             "section": request.form["section"],
             "parent_phone": request.form["parent_phone"],
             "parent_email": request.form["parent_email"]
         }
-        db.update_student(student_id, **update_data)
+        duplicate = db.get_student_by_register_no(update_data["register_no"])
+        if duplicate and duplicate["id"] != student_id:
+            return redirect(url_for("edit_student", student_id=student_id))
+
+        try:
+            db.update_student(student_id, **update_data)
+        except ValueError:
+            return redirect(url_for("edit_student", student_id=student_id))
         return redirect(url_for("teacher_dashboard"))
     
     student = db.get_student_by_id(student_id)
