@@ -121,7 +121,7 @@ def create_account():
         password = request.form["password"]
         confirm_password = request.form["confirm_password"]
         email = request.form["email"].strip()
-        role = request.form["role"]
+        role = request.form.get("role", "").strip().lower()
         security_question = request.form["security_question"]
         security_answer = request.form["security_answer"].lower().strip()
 
@@ -154,6 +154,12 @@ def create_account():
         existing_user = get_db().get_user_by_username(username)
         if existing_user:
             error = "Username already exists"
+            return render_template("create_account.html", error=error, questions=SECURITY_QUESTIONS, form_data=form_data)
+        
+        # Check if email already exists locally to prevent confusing API errors
+        existing_email = get_db().client.table("users").select("email").eq("email", email).execute()
+        if existing_email.data:
+            error = "Email address is already registered."
             return render_template("create_account.html", error=error, questions=SECURITY_QUESTIONS, form_data=form_data)
         
         try:
@@ -300,6 +306,50 @@ def student_dashboard():
             db_error="Unable to load records because database is currently unreachable.",
         )
 
+# ---------- Change Password (Dashboard) ----------
+@app.route("/change-password", methods=["POST"])
+def change_password():
+    if "username" not in session:
+        return redirect(url_for("login"))
+    
+    username = session["username"]
+    role = session.get("role", "student")
+    
+    old_password = request.form.get("old_password", "")
+    new_password = request.form.get("new_password", "").strip()
+    confirm_password = request.form.get("confirm_password", "").strip()
+    
+    db = get_db()
+    
+    def render_dash(error=None, success=None):
+        try:
+            students = db.get_all_students()
+        except Exception:
+            students = []
+            if not error:
+                error = "Unable to fetch students due to database connectivity issue."
+        template = "teacher_dashboard.html" if role == "teacher" else "student_dashboard.html"
+        return render_template(template, students=students, db_error=error, success_msg=success)
+
+    current_auth = db.sign_in_user(username, old_password)
+    if not current_auth:
+        return render_dash(error="Change Password Failed: Old password is incorrect")
+        
+    if new_password != confirm_password:
+        return render_dash(error="Change Password Failed: New passwords do not match")
+        
+    if not is_strong_password(new_password):
+        return render_dash(error="Change Password Failed: Password must be at least 8 chars with uppercase, lowercase, number, and special character")
+        
+    try:
+        # Update Supabase auth password using the active user session
+        db.client.auth.update_user({"password": new_password})
+        # Update local profile table
+        db.update_user_password(username, new_password)
+        return render_dash(success="Password updated successfully!")
+    except Exception as e:
+        return render_dash(error=f"Error changing password: {str(e)}")
+
 # ---------- Forgot Password ----------
 @app.route("/forgot-password", methods=["GET", "POST"])
 def forgot_password():
@@ -352,14 +402,13 @@ def forgot_password():
         elif step == "change_password":
             # Step 3: Change password
             username = request.form.get("username", "").strip()
-            old_password = request.form.get("old_password", "")
-            new_password = request.form.get("new_password", "")
-            confirm_password = request.form.get("confirm_password", "")
+            email = request.form.get("email", "").strip()
+            new_password = request.form.get("new_password", "").strip()
+            confirm_password = request.form.get("confirm_password", "").strip()
 
-            # Old password must be correct
-            current_auth = get_db().sign_in_user(username, old_password)
-            if not current_auth:
-                error = "Old password is incorrect"
+            user = get_db().get_user_by_username(username)
+            if not user or user.get("email", "").strip().lower() != email.lower():
+                error = "Email verification failed. Incorrect email."
                 show_password_form = True
                 show_reset_form = True
                 username_verified = username
@@ -390,14 +439,14 @@ def reset_password(token):
             return render_template("reset_password.html", error=error_msg or "Invalid token")
         
         if request.method == "POST":
-            old_password = request.form.get("old_password", "")
-            new_password = request.form["new_password"]
-            confirm_password = request.form["confirm_password"]
+            email = request.form.get("email", "").strip()
+            new_password = request.form.get("new_password", "").strip()
+            confirm_password = request.form.get("confirm_password", "").strip()
 
             username = reset_record["username"]
-            current_auth = get_db().sign_in_user(username, old_password)
-            if not current_auth:
-                return render_template("reset_password.html", error="Old password is incorrect")
+            user = get_db().get_user_by_username(username)
+            if not user or user.get("email", "").strip().lower() != email.lower():
+                return render_template("reset_password.html", error="Email verification failed. Incorrect email.")
             if new_password != confirm_password:
                 return render_template("reset_password.html", error="Passwords do not match")
             if not is_strong_password(new_password):
@@ -421,4 +470,4 @@ def handle_exception(error):
     if isinstance(error, HTTPException):
         return error
     app.logger.exception("Unhandled application error: %s", error)
-    return "Internal Server Error. Check server logs and verify Supabase env vars/migrations.", 500
+    return "Internal Server Error. Check server logs and verify Supabase connectivity.", 500

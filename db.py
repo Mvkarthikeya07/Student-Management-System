@@ -39,8 +39,8 @@ def _normalize_indian_phone(phone: str) -> str:
 class SupabaseConfig:
     """Supabase configuration and client management."""
 
-    SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
-    SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
+    SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip().strip("\"'")
+    SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip().strip("\"'")
 
     @staticmethod
     def normalize_url(url: str) -> str:
@@ -57,7 +57,18 @@ class SupabaseConfig:
             raise ValueError("SUPABASE_URL is not set in .env")
         if not SupabaseConfig.SUPABASE_KEY:
             raise ValueError("SUPABASE_KEY is not set in .env")
-        return create_client(normalized_url, SupabaseConfig.SUPABASE_KEY)
+            
+        key = SupabaseConfig.SUPABASE_KEY
+        if len(key.split(".")) != 3:
+            preview = key[:15] + "..." if len(key) > 15 else key
+            raise ValueError(
+                f"\n\nERROR: SUPABASE_KEY is invalid.\n"
+                f"A valid Supabase key must be a JWT (3 parts separated by dots).\n"
+                f"Your key starts with: '{preview}' (Total length: {len(key)})\n"
+                f"Please carefully re-copy the 'service_role' key from your Supabase Dashboard -> Project Settings -> API.\n"
+            )
+
+        return create_client(normalized_url, key)
 
 
 class DatabaseOps:
@@ -66,8 +77,11 @@ class DatabaseOps:
     def __init__(self, access_token: str = None, refresh_token: str = None):
         self.client = SupabaseConfig.get_client()
         if access_token and refresh_token:
-            # Bind this client to the authenticated user session (RLS-aware requests).
-            self.client.auth.set_session(access_token, refresh_token)
+            try:
+                # Bind this client to the authenticated user session (RLS-aware requests).
+                self.client.auth.set_session(access_token, refresh_token)
+            except Exception as e:
+                print(f"Warning: Failed to restore Supabase auth session. Tokens might be expired. {e}")
 
     def create_user(self, username: str, password: str, email: str, role: str, security_question: str, security_answer: str):
         data = {
@@ -103,14 +117,14 @@ class DatabaseOps:
             "username": username,
             "password": "_supabase_auth_managed_",
             "email": email,
-            "role": role,
+            "role": role.lower().strip(),
             "security_question": security_question,
             "security_answer": security_answer.lower().strip(),
             "is_active": True,
         }
 
-        # Upsert keeps this idempotent if the user retries sign-up flow.
-        self.client.table("users").upsert(profile_data, on_conflict="username").execute()
+        # Insert into local public.users table
+        self.client.table("users").insert(profile_data).execute()
         return {"user": auth_user, "session": auth_session}
 
     def get_user_by_username(self, username: str):
@@ -162,6 +176,15 @@ class DatabaseOps:
         return {"user": profile, "session": auth_session}
 
     def update_user_password(self, username: str, new_password: str):
+        # Update the password in Supabase Auth (requires service_role key)
+        user = self.get_user_by_username(username)
+        if user and user.get("id"):
+            try:
+                self.client.auth.admin.update_user_by_id(user["id"], {"password": new_password})
+            except Exception as e:
+                print(f"Warning: Failed to update Supabase Auth password. Ensure SUPABASE_KEY is the service_role key. Error: {e}")
+
+        # Update local public.users table
         hashed_password = _hash_password(new_password)
         response = self.client.table("users").update({"password": hashed_password}).eq("username", username).execute()
         return response.data

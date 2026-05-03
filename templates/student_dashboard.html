@@ -10,6 +10,35 @@
 <div class="alert alert-danger">{{ db_error }}</div>
 {% endif %}
 
+{% if success_msg %}
+<div class="alert alert-success">{{ success_msg }}</div>
+{% endif %}
+
+<div class="surface-card mb-4">
+    <h5 class="mb-3">Change Password</h5>
+    <form class="row g-3" method="POST" action="{{ url_for('change_password') }}">
+        <div class="col-md-3">
+            <div class="input-group">
+                <input type="password" id="dash_old_password" name="old_password" class="form-control" placeholder="Old Password" required>
+                <button class="btn btn-soft" type="button" id="toggle_dash_old_password">Show</button>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="input-group">
+                <input type="password" id="dash_new_password" name="new_password" class="form-control" placeholder="New Password" autocomplete="new-password" required>
+                <button class="btn btn-soft" type="button" id="toggle_dash_new_password">Show</button>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="input-group">
+                <input type="password" id="dash_confirm_password" name="confirm_password" class="form-control" placeholder="Confirm New Password" autocomplete="new-password" required>
+                <button class="btn btn-soft" type="button" id="toggle_dash_confirm_password">Show</button>
+            </div>
+        </div>
+        <div class="col-md-3 d-grid"><button class="btn btn-modern">Update Password</button></div>
+    </form>
+</div>
+
 <div class="surface-card">
     <h5 class="mb-3">Student Records</h5>
     <div class="table-responsive">
@@ -43,4 +72,21 @@
         </table>
     </div>
 </div>
+{% endblock %}
+{% block extra_scripts %}
+<script>
+function attachToggle(inputId, buttonId) {
+    const input = document.getElementById(inputId);
+    const button = document.getElementById(buttonId);
+    if (!input || !button) return;
+    button.addEventListener('click', function () {
+        const isHidden = input.type === 'password';
+        input.type = isHidden ? 'text' : 'password';
+        button.textContent = isHidden ? 'Hide' : 'Show';
+    });
+}
+attachToggle('dash_old_password', 'toggle_dash_old_password');
+attachToggle('dash_new_password', 'toggle_dash_new_password');
+attachToggle('dash_confirm_password', 'toggle_dash_confirm_password');
+</script>
 {% endblock %}
