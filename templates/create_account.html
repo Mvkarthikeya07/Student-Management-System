@@ -23,30 +23,36 @@
                 <form method="POST">
                     <div class="mb-3">
                         <label class="form-label">Username</label>
-                        <input type="text" name="username" class="form-control" placeholder="Choose a username" required>
+                        <input type="text" name="username" class="form-control" placeholder="Choose a username" value="{{ form_data.username }}" required>
                     </div>
                     
                     <div class="mb-3">
                         <label class="form-label">Email</label>
-                        <input type="email" name="email" class="form-control" placeholder="Enter email" required>
+                        <input type="email" name="email" class="form-control" placeholder="Enter email" value="{{ form_data.email }}" required>
                     </div>
                     
                     <div class="mb-3">
                         <label class="form-label">Password</label>
-                        <input type="password" name="password" class="form-control" placeholder="Enter password (min 8, upper/lower/number/special)" required>
+                        <div class="input-group">
+                            <input type="password" id="signup_password" name="password" class="form-control" placeholder="Enter password (min 8, upper/lower/number/special)" required>
+                            <button class="btn btn-outline-secondary" type="button" id="toggle_signup_password" aria-label="Show password">👁</button>
+                        </div>
                     </div>
                     
                     <div class="mb-3">
                         <label class="form-label">Retype Password</label>
-                        <input type="password" name="confirm_password" class="form-control" placeholder="Retype password" required>
+                        <div class="input-group">
+                            <input type="password" id="signup_confirm_password" name="confirm_password" class="form-control" placeholder="Retype password" required>
+                            <button class="btn btn-outline-secondary" type="button" id="toggle_signup_confirm_password" aria-label="Show password">👁</button>
+                        </div>
                     </div>
                     
                     <div class="mb-3">
                         <label class="form-label">Role</label>
                         <select name="role" class="form-control" required>
                             <option value="">Select a role</option>
-                            <option value="student">Student</option>
-                            <option value="teacher">Teacher</option>
+                            <option value="student" {% if form_data.role == 'student' %}selected{% endif %}>Student</option>
+                            <option value="teacher" {% if form_data.role == 'teacher' %}selected{% endif %}>Teacher</option>
                         </select>
                     </div>
 
@@ -55,14 +61,14 @@
                         <select name="security_question" class="form-control" required>
                             <option value="">Select a security question</option>
                             {% for question in questions %}
-                            <option value="{{ question }}">{{ question }}</option>
+                            <option value="{{ question }}" {% if form_data.security_question == question %}selected{% endif %}>{{ question }}</option>
                             {% endfor %}
                         </select>
                     </div>
                     
                     <div class="mb-3">
                         <label class="form-label">Security Answer</label>
-                        <input type="text" name="security_answer" class="form-control" placeholder="Answer to your security question" required>
+                        <input type="text" name="security_answer" class="form-control" placeholder="Answer to your security question" value="{{ form_data.security_answer }}" required>
                         <small class="text-muted">Keep this safe - you'll need it to reset your password</small>
                     </div>
                     
@@ -75,6 +81,21 @@
             {% endif %}
         </div>
     </div>
+    <script>
+        function attachToggle(inputId, buttonId) {
+            const input = document.getElementById(inputId);
+            const button = document.getElementById(buttonId);
+            if (!input || !button) return;
+            button.addEventListener('click', function () {
+                const isHidden = input.type === 'password';
+                input.type = isHidden ? 'text' : 'password';
+                button.setAttribute('aria-label', isHidden ? 'Hide password' : 'Show password');
+            });
+        }
+
+        attachToggle('signup_password', 'toggle_signup_password');
+        attachToggle('signup_confirm_password', 'toggle_signup_confirm_password');
+    </script>
 </body>
 </html>
 

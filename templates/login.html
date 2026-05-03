@@ -21,7 +21,10 @@
                 </div>
                 <div class="mb-3">
                     <label class="form-label">Password</label>
-                    <input type="password" name="password" class="form-control" placeholder="Enter password" required>
+                    <div class="input-group">
+                        <input type="password" id="login_password" name="password" class="form-control" placeholder="Enter password" required>
+                        <button class="btn btn-outline-secondary" type="button" id="toggle_login_password" aria-label="Show password">👁</button>
+                    </div>
                 </div>
                 <button class="btn btn-primary w-100">Login</button>
             </form>
@@ -33,5 +36,16 @@
             </div>
         </div>
     </div>
+    <script>
+        const loginPassword = document.getElementById('login_password');
+        const loginToggle = document.getElementById('toggle_login_password');
+        if (loginPassword && loginToggle) {
+            loginToggle.addEventListener('click', function () {
+                const isHidden = loginPassword.type === 'password';
+                loginPassword.type = isHidden ? 'text' : 'password';
+                loginToggle.setAttribute('aria-label', isHidden ? 'Hide password' : 'Show password');
+            });
+        }
+    </script>
 </body>
 </html>

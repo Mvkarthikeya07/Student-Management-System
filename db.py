@@ -63,8 +63,11 @@ class SupabaseConfig:
 class DatabaseOps:
     """Database operations wrapper."""
 
-    def __init__(self):
+    def __init__(self, access_token: str = None, refresh_token: str = None):
         self.client = SupabaseConfig.get_client()
+        if access_token and refresh_token:
+            # Bind this client to the authenticated user session (RLS-aware requests).
+            self.client.auth.set_session(access_token, refresh_token)
 
     def create_user(self, username: str, password: str, email: str, role: str, security_question: str, security_answer: str):
         data = {
@@ -78,6 +81,38 @@ class DatabaseOps:
         response = self.client.table("users").insert(data).execute()
         return response.data
 
+    def sign_up_user(self, username: str, password: str, email: str, role: str, security_question: str, security_answer: str):
+        """
+        Create an auth user in Supabase Auth and a matching profile row in public.users.
+        """
+        auth_response = self.client.auth.sign_up(
+            {
+                "email": email,
+                "password": password,
+                "options": {"data": {"username": username, "role": role}},
+            }
+        )
+
+        auth_user = getattr(auth_response, "user", None)
+        auth_session = getattr(auth_response, "session", None)
+        if not auth_user:
+            raise ValueError("Sign up failed. Please verify email/password settings in Supabase Auth.")
+
+        profile_data = {
+            "id": auth_user.id,
+            "username": username,
+            "password": "_supabase_auth_managed_",
+            "email": email,
+            "role": role,
+            "security_question": security_question,
+            "security_answer": security_answer.lower().strip(),
+            "is_active": True,
+        }
+
+        # Upsert keeps this idempotent if the user retries sign-up flow.
+        self.client.table("users").upsert(profile_data, on_conflict="username").execute()
+        return {"user": auth_user, "session": auth_session}
+
     def get_user_by_username(self, username: str):
         response = self.client.table("users").select("*").eq("username", username).execute()
         return response.data[0] if response.data else None
@@ -87,6 +122,44 @@ class DatabaseOps:
         if user and _verify_password(user["password"], password):
             return user
         return None
+
+    def sign_in_user(self, login_identifier: str, password: str):
+        """
+        Authenticate via Supabase Auth (email+password).
+        Accepts either username or email as login identifier.
+        """
+        identifier = (login_identifier or "").strip()
+        if not identifier:
+            return None
+
+        if "@" in identifier:
+            email = identifier
+        else:
+            profile = self.get_user_by_username(identifier)
+            if not profile:
+                return None
+            email = profile.get("email", "")
+            if not email:
+                return None
+
+        auth_response = self.client.auth.sign_in_with_password(
+            {"email": email, "password": password}
+        )
+        auth_user = getattr(auth_response, "user", None)
+        auth_session = getattr(auth_response, "session", None)
+        if not auth_user:
+            return None
+
+        profile_response = self.client.table("users").select("*").eq("id", auth_user.id).limit(1).execute()
+        profile = profile_response.data[0] if profile_response.data else None
+        if not profile:
+            profile_response = self.client.table("users").select("*").eq("email", email).limit(1).execute()
+            profile = profile_response.data[0] if profile_response.data else None
+
+        if profile is None:
+            return None
+
+        return {"user": profile, "session": auth_session}
 
     def update_user_password(self, username: str, new_password: str):
         hashed_password = _hash_password(new_password)

@@ -13,7 +13,10 @@ app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret-change-me")  # Requir
 def get_db() -> DatabaseOps:
     """Create DB client lazily per request to avoid import-time crashes in serverless."""
     if "db" not in g:
-        g.db = DatabaseOps()
+        g.db = DatabaseOps(
+            access_token=session.get("sb_access_token"),
+            refresh_token=session.get("sb_refresh_token"),
+        )
     return g.db
 
 
@@ -69,12 +72,17 @@ def login():
         username = request.form["username"].strip()
         password = request.form["password"]
 
-        # Use Supabase for authentication
-        user = get_db().verify_user_password(username, password)
+        # Use Supabase Auth for authentication
+        auth_result = get_db().sign_in_user(username, password)
+        if auth_result:
+            user = auth_result["user"]
+            auth_session = auth_result.get("session")
 
-        if user:
             session["username"] = user["username"]
             session["role"] = user["role"]
+            if auth_session:
+                session["sb_access_token"] = auth_session.access_token
+                session["sb_refresh_token"] = auth_session.refresh_token
             return redirect(url_for("home"))
         else:
             error = "Invalid Credentials"
@@ -82,6 +90,10 @@ def login():
 
 @app.route("/logout")
 def logout():
+    try:
+        get_db().client.auth.sign_out()
+    except Exception:
+        pass
     session.clear()
     return redirect(url_for("login"))
 
@@ -90,46 +102,69 @@ def logout():
 def create_account():
     error = None
     success = None
+    form_data = {
+        "username": "",
+        "email": "",
+        "role": "",
+        "security_question": "",
+        "security_answer": "",
+    }
     if request.method == "POST":
         username = request.form["username"].strip()
         password = request.form["password"]
         confirm_password = request.form["confirm_password"]
-        email = request.form["email"]
+        email = request.form["email"].strip()
         role = request.form["role"]
         security_question = request.form["security_question"]
         security_answer = request.form["security_answer"].lower().strip()
+
+        form_data.update(
+            {
+                "username": username,
+                "email": email,
+                "role": role,
+                "security_question": security_question,
+                "security_answer": security_answer,
+            }
+        )
         
         # Validate passwords match
         if password != confirm_password:
             error = "Passwords do not match"
-            return render_template("create_account.html", error=error, questions=SECURITY_QUESTIONS)
+            return render_template("create_account.html", error=error, questions=SECURITY_QUESTIONS, form_data=form_data)
         
         # Validate password strength
         if not is_strong_password(password):
             error = "Password must be at least 8 chars with uppercase, lowercase, number, and special character"
-            return render_template("create_account.html", error=error, questions=SECURITY_QUESTIONS)
+            return render_template("create_account.html", error=error, questions=SECURITY_QUESTIONS, form_data=form_data)
         
         # Validate security answer
         if not security_answer:
             error = "Security answer is required"
-            return render_template("create_account.html", error=error, questions=SECURITY_QUESTIONS)
+            return render_template("create_account.html", error=error, questions=SECURITY_QUESTIONS, form_data=form_data)
         
         # Check if username already exists
         existing_user = get_db().get_user_by_username(username)
         if existing_user:
             error = "Username already exists"
-            return render_template("create_account.html", error=error, questions=SECURITY_QUESTIONS)
+            return render_template("create_account.html", error=error, questions=SECURITY_QUESTIONS, form_data=form_data)
         
         try:
-            # Create user in Supabase
-            get_db().create_user(username, password, email, role, security_question, security_answer)
+            # Create user in Supabase Auth + users profile table
+            sign_up_result = get_db().sign_up_user(
+                username, password, email, role, security_question, security_answer
+            )
+            sign_up_session = sign_up_result.get("session")
+            if sign_up_session:
+                session["sb_access_token"] = sign_up_session.access_token
+                session["sb_refresh_token"] = sign_up_session.refresh_token
             success = "Account created successfully! You can now login."
-            return render_template("create_account.html", success=success, questions=SECURITY_QUESTIONS)
+            return render_template("create_account.html", success=success, questions=SECURITY_QUESTIONS, form_data=form_data)
         except Exception as e:
             error = f"Error creating account: {str(e)}"
-            return render_template("create_account.html", error=error, questions=SECURITY_QUESTIONS)
+            return render_template("create_account.html", error=error, questions=SECURITY_QUESTIONS, form_data=form_data)
     
-    return render_template("create_account.html", questions=SECURITY_QUESTIONS)
+    return render_template("create_account.html", questions=SECURITY_QUESTIONS, form_data=form_data)
 
 # ---------- Teacher Dashboard ----------
 @app.route("/teacher")
@@ -137,8 +172,15 @@ def teacher_dashboard():
     if "role" not in session or session["role"] != "teacher":
         return redirect(url_for("login"))
 
-    students = get_db().get_all_students()
-    return render_template("teacher_dashboard.html", students=students)
+    try:
+        students = get_db().get_all_students()
+        return render_template("teacher_dashboard.html", students=students, db_error=None)
+    except Exception:
+        return render_template(
+            "teacher_dashboard.html",
+            students=[],
+            db_error="Unable to connect to database right now. Please verify Supabase env vars and network access.",
+        )
 
 @app.route("/add", methods=["POST"])
 def add_student():
@@ -207,15 +249,25 @@ def search_student():
         return redirect(url_for("login"))
 
     keyword = request.form["keyword"]
-    students = get_db().search_students(keyword)
-    return render_template("teacher_dashboard.html", students=students)
+    try:
+        students = get_db().search_students(keyword)
+        return render_template("teacher_dashboard.html", students=students, db_error=None)
+    except Exception:
+        return render_template(
+            "teacher_dashboard.html",
+            students=[],
+            db_error="Search failed due to database connectivity issue.",
+        )
 
 @app.route("/export")
 def export_students():
     if "role" not in session or session["role"] != "teacher":
         return redirect(url_for("login"))
     
-    students = get_db().get_all_students()
+    try:
+        students = get_db().get_all_students()
+    except Exception:
+        return "Database unavailable for export right now.", 503
     df = pd.DataFrame(students)
     
     # Create in-memory CSV file
@@ -231,8 +283,15 @@ def student_dashboard():
     if "role" not in session or session["role"] != "student":
         return redirect(url_for("login"))
     
-    students = get_db().get_all_students()
-    return render_template("student_dashboard.html", students=students)
+    try:
+        students = get_db().get_all_students()
+        return render_template("student_dashboard.html", students=students, db_error=None)
+    except Exception:
+        return render_template(
+            "student_dashboard.html",
+            students=[],
+            db_error="Unable to load records because database is currently unreachable.",
+        )
 
 # ---------- Forgot Password ----------
 @app.route("/forgot-password", methods=["GET", "POST"])
