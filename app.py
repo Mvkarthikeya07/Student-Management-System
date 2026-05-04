@@ -396,35 +396,6 @@ def forgot_password():
                          username_verified=username_verified,
                          security_question=security_question)
 
-@app.route("/reset-password/<token>", methods=["GET", "POST"])
-def reset_password(token):
-    try:
-        reset_record, error_msg = get_db().verify_password_reset_token(token)
-        
-        if not reset_record:
-            return render_template("reset_password.html", error=error_msg or "Invalid token")
-        
-        if request.method == "POST":
-            email = request.form.get("email", "").strip()
-            new_password = request.form.get("new_password", "").strip()
-            confirm_password = request.form.get("confirm_password", "").strip()
-
-            username = reset_record["username"]
-            user = get_db().get_user_by_username(username)
-            if not user or user.get("email", "").strip().lower() != email.lower():
-                return render_template("reset_password.html", error="Email verification failed. Incorrect email.")
-            if new_password != confirm_password:
-                return render_template("reset_password.html", error="Passwords do not match")
-            if not is_strong_password(new_password):
-                return render_template("reset_password.html", error="Password must be at least 8 chars with uppercase, lowercase, number, and special character")
-
-            get_db().update_user_password(username, new_password)
-            return render_template("reset_password.html", success=True)
-        
-        return render_template("reset_password.html", token=token)
-    
-    except Exception as e:
-        return render_template("reset_password.html", error=f"Error: {str(e)}")
 
 if __name__ == "__main__":
     debug_mode = os.getenv("FLASK_DEBUG", "False").lower() == "true"
