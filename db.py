@@ -1,4 +1,4 @@
-﻿"""Database module for Supabase-backed Student Information System."""
+"""Database module for Supabase-backed Student Information System."""
 
 import os
 import re
@@ -76,14 +76,8 @@ class SupabaseConfig:
 class DatabaseOps:
     """Database operations wrapper."""
 
-    def __init__(self, access_token: str = None, refresh_token: str = None):
+    def __init__(self):
         self.client = SupabaseConfig.get_client()
-        if access_token and refresh_token:
-            try:
-                # Bind this client to the authenticated user session (RLS-aware requests).
-                self.client.auth.set_session(access_token, refresh_token)
-            except Exception as e:
-                print(f"Warning: Failed to restore Supabase auth session. Tokens might be expired. {e}")
 
     def create_user(self, username: str, password: str, email: str, role: str, security_question: str, security_answer: str):
         data = {
@@ -97,37 +91,6 @@ class DatabaseOps:
         response = self.client.table("users").insert(data).execute()
         return response.data
 
-    def sign_up_user(self, username: str, password: str, email: str, role: str, security_question: str, security_answer: str):
-        """
-        Create an auth user in Supabase Auth and a matching profile row in public.users.
-        """
-        auth_response = self.client.auth.sign_up(
-            {
-                "email": email,
-                "password": password,
-                "options": {"data": {"username": username, "role": role}},
-            }
-        )
-
-        auth_user = getattr(auth_response, "user", None)
-        auth_session = getattr(auth_response, "session", None)
-        if not auth_user:
-            raise ValueError("Sign up failed. Please verify email/password settings in Supabase Auth.")
-
-        profile_data = {
-            "id": auth_user.id,
-            "username": username,
-            "password": "_supabase_auth_managed_",
-            "email": email,
-            "role": role.lower().strip(),
-            "security_question": security_question,
-            "security_answer": security_answer.lower().strip(),
-            "is_active": True,
-        }
-
-        # Insert into local public.users table
-        self.client.table("users").insert(profile_data).execute()
-        return {"user": auth_user, "session": auth_session}
 
     def get_user_by_username(self, username: str):
         response = self.client.table("users").select("*").eq("username", username).execute()
@@ -141,54 +104,38 @@ class DatabaseOps:
 
     def sign_in_user(self, login_identifier: str, password: str):
         """
-        Authenticate via Supabase Auth (email+password).
+        Authenticate by checking the public.users table.
         Accepts either username or email as login identifier.
         """
         identifier = (login_identifier or "").strip()
         if not identifier:
             return None
 
+        profile = None
         if "@" in identifier:
-            email = identifier
+            response = self.client.table("users").select("*").eq("email", identifier).execute()
+            if response.data:
+                if len(response.data) > 1:
+                    raise ValueError("Multiple accounts share this email. Please login using your specific username.")
+                profile = response.data[0]
         else:
             profile = self.get_user_by_username(identifier)
-            if not profile:
-                return None
-            email = profile.get("email", "")
-            if not email:
-                return None
-
-        auth_response = self.client.auth.sign_in_with_password(
-            {"email": email, "password": password}
-        )
-        auth_user = getattr(auth_response, "user", None)
-        auth_session = getattr(auth_response, "session", None)
-        if not auth_user:
-            return None
-
-        profile_response = self.client.table("users").select("*").eq("id", auth_user.id).limit(1).execute()
-        profile = profile_response.data[0] if profile_response.data else None
+            
         if not profile:
-            profile_response = self.client.table("users").select("*").eq("email", email).limit(1).execute()
-            profile = profile_response.data[0] if profile_response.data else None
-
-        if profile is None:
             return None
 
-        return {"user": profile, "session": auth_session}
+        # Verify password directly against local DB hash
+        if _verify_password(profile["password"], password):
+            return {"user": profile}
+            
+        return None
 
     def update_user_password(self, username: str, new_password: str):
-        # Update the password in Supabase Auth (requires service_role key)
-        user = self.get_user_by_username(username)
-        if user and user.get("id"):
-            try:
-                self.client.auth.admin.update_user_by_id(user["id"], {"password": new_password})
-            except Exception as e:
-                print(f"Warning: Failed to update Supabase Auth password. Ensure SUPABASE_KEY is the service_role key. Error: {e}")
-
-        # Update local public.users table
+        # Update local public.users table only
         hashed_password = _hash_password(new_password)
         response = self.client.table("users").update({"password": hashed_password}).eq("username", username).execute()
+        if not response.data:
+            raise Exception("Database update was blocked. Please ensure you are using the 'service_role' key in your .env file, NOT the 'anon' key.")
         return response.data
 
     def create_student(

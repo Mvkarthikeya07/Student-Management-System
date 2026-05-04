@@ -1,4 +1,4 @@
-﻿import os
+import os
 import re
 from flask import Flask, render_template, request, redirect, url_for, session, send_file, g
 from db import DatabaseOps
@@ -13,10 +13,7 @@ app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret-change-me")
 def get_db() -> DatabaseOps:
     """Create DB client lazily per request to avoid import-time crashes in serverless."""
     if "db" not in g:
-        g.db = DatabaseOps(
-            access_token=session.get("sb_access_token"),
-            refresh_token=session.get("sb_refresh_token"),
-        )
+        g.db = DatabaseOps()
     return g.db
 
 
@@ -73,17 +70,13 @@ def login():
         password = request.form["password"]
 
         try:
-            # Use Supabase Auth for authentication
+            # Use local auth
             auth_result = get_db().sign_in_user(username, password)
             if auth_result:
                 user = auth_result["user"]
-                auth_session = auth_result.get("session")
 
                 session["username"] = user["username"]
                 session["role"] = user["role"]
-                if auth_session:
-                    session["sb_access_token"] = auth_session.access_token
-                    session["sb_refresh_token"] = auth_session.refresh_token
                 return redirect(url_for("home"))
             else:
                 error = "Invalid Credentials"
@@ -97,10 +90,6 @@ def login():
 
 @app.route("/logout")
 def logout():
-    try:
-        get_db().client.auth.sign_out()
-    except Exception:
-        pass
     session.clear()
     return redirect(url_for("login"))
 
@@ -156,22 +145,18 @@ def create_account():
             error = "Username already exists"
             return render_template("create_account.html", error=error, questions=SECURITY_QUESTIONS, form_data=form_data)
         
-        # Check if email already exists locally to prevent confusing API errors
-        existing_email = get_db().client.table("users").select("email").eq("email", email).execute()
-        if existing_email.data:
-            error = "Email address is already registered."
-            return render_template("create_account.html", error=error, questions=SECURITY_QUESTIONS, form_data=form_data)
-        
+        # Email can be shared across multiple accounts now (e.g. multiple children with same parent email)
         try:
-            # Create user in Supabase Auth + users profile table
-            sign_up_result = get_db().sign_up_user(
-                username, password, email, role, security_question, security_answer
+            # Create user in local profile table directly
+            get_db().create_user(
+                username=username, 
+                password=password, 
+                email=email, 
+                role=role, 
+                security_question=security_question, 
+                security_answer=security_answer
             )
-            sign_up_session = sign_up_result.get("session")
-            if sign_up_session:
-                session["sb_access_token"] = sign_up_session.access_token
-                session["sb_refresh_token"] = sign_up_session.refresh_token
-            success = "Account created successfully. If email confirmation is enabled, verify your email first, then login."
+            success = "Account created successfully. You can now login."
             return render_template("create_account.html", success=success, questions=SECURITY_QUESTIONS, form_data=form_data)
         except Exception as e:
             error = f"Error creating account: {str(e)}"
@@ -315,14 +300,11 @@ def change_password():
     username = session["username"]
     role = session.get("role", "student")
     
+    old_password = request.form.get("old_password", "").strip()
     new_password = request.form.get("new_password", "").strip()
     confirm_password = request.form.get("confirm_password", "").strip()
-    otp = request.form.get("otp", "").strip()
-    step = request.form.get("step", "send_code")
     
     db = get_db()
-    user = db.get_user_by_username(username)
-    email = user.get("email", "").strip() if user else ""
     
     def render_dash(error=None, success=None):
         try:
@@ -334,64 +316,38 @@ def change_password():
         template = "teacher_dashboard.html" if role == "teacher" else "student_dashboard.html"
         return render_template(template, students=students, db_error=error, success_msg=success)
 
-    if step == "send_code":
-        # Send OTP to registered email
-        if not email:
-            return render_dash(error="No email associated with your account")
+    if not old_password or not new_password or not confirm_password:
+        return render_dash(error="Please fill in all password fields")
         
-        # Generate and send OTP
-        otp_code = db.generate_otp()
-        if db.send_verification_email(email, username, otp_code):
-            return render_dash(success=f"Verification code sent to {email}. Enter it along with your new password to proceed.")
-        else:
-            return render_dash(error="Failed to send verification code. Please try again.")
-    
-    elif step == "verify_and_update":
-        # Verify OTP and update password
-        if not otp or not new_password or not confirm_password:
-            return render_dash(error="Please enter verification code and new password")
+    # Verify old password using sign_in
+    if not db.sign_in_user(username, old_password):
+        return render_dash(error="Incorrect old password")
         
-        # Verify OTP
-        success_verify, msg, verified_username = db.verify_email_otp(email, otp)
-        if not success_verify:
-            return render_dash(error=f"Verification failed: {msg}. Please request a new code.")
+    if new_password != confirm_password:
+        return render_dash(error="New passwords do not match")
         
-        if verified_username != username:
-            return render_dash(error="Verification failed: Email does not match")
+    if not is_strong_password(new_password):
+        return render_dash(error="Password must be at least 8 chars with uppercase, lowercase, number, and special character")
         
-        # Verify passwords match
-        if new_password != confirm_password:
-            return render_dash(error="New passwords do not match")
-        
-        # Verify password strength
-        if not is_strong_password(new_password):
-            return render_dash(error="Password must be at least 8 chars with uppercase, lowercase, number, and special character")
-        
-        try:
-            # Update password
-            db.client.auth.update_user({"password": new_password})
-            db.update_user_password(username, new_password)
-            return render_dash(success="Password updated successfully!")
-        except Exception as e:
-            return render_dash(error=f"Error changing password: {str(e)}")
-    
-    return render_dash(error="Invalid request")
+    try:
+        db.update_user_password(username, new_password)
+        return render_dash(success="Password updated successfully!")
+    except Exception as e:
+        return render_dash(error=f"Error changing password: {str(e)}")
 
 # ---------- Forgot Password ----------
 @app.route("/forgot-password", methods=["GET", "POST"])
 def forgot_password():
     error = None
     success = None
-    show_email_form = False
-    show_password_form = False
+    show_security_form = False
     username_verified = None
-    email_verified = None
+    security_question = None
     
     if request.method == "POST":
         step = request.form.get("step", "verify_username")
         
         if step == "verify_username":
-            # Step 1: Verify username and send OTP to email
             username = request.form.get("username", "").strip()
             if not username:
                 error = "Please enter a username"
@@ -400,71 +356,45 @@ def forgot_password():
                 if not user:
                     error = "Username not found"
                 else:
-                    email = user.get("email", "").strip()
-                    if not email:
-                        error = "No email associated with this account"
-                    else:
-                        # Generate and send OTP
-                        otp = get_db().generate_otp()
-                        if get_db().send_verification_email(email, username, otp):
-                            username_verified = username
-                            email_verified = email
-                            show_email_form = True
-                            success = f"Verification code sent to {email}. Check your email."
-                        else:
-                            error = "Failed to send verification code. Please try again."
-        
-        elif step == "verify_otp":
-            # Step 2: Verify OTP
-            email = request.form.get("email", "").strip()
-            otp = request.form.get("otp", "").strip()
-            
-            if not email or not otp:
-                error = "Please enter email and OTP"
-                email_verified = email
-                show_email_form = True
-            else:
-                success_verify, msg, username = get_db().verify_email_otp(email, otp)
-                if success_verify:
                     username_verified = username
-                    email_verified = email
-                    show_password_form = True
-                else:
-                    error = msg
-                    email_verified = email
-                    show_email_form = True
+                    security_question = user.get("security_question", "What is your security question?")
+                    show_security_form = True
         
-        elif step == "change_password":
-            # Step 3: Change password
-            email = request.form.get("email", "").strip()
+        elif step == "reset_with_security":
             username = request.form.get("username", "").strip()
+            email = request.form.get("email", "").strip()
+            security_answer = request.form.get("security_answer", "").strip().lower()
             new_password = request.form.get("new_password", "").strip()
             confirm_password = request.form.get("confirm_password", "").strip()
 
             user = get_db().get_user_by_username(username)
-            if not user or user.get("email", "").strip().lower() != email.lower():
-                error = "Email verification failed. Incorrect email."
-                show_password_form = True
-                username_verified = username
-                email_verified = email
-            elif new_password != confirm_password:
-                error = "Passwords do not match"
-                show_password_form = True
-                username_verified = username
-                email_verified = email
-            elif not is_strong_password(new_password):
-                error = "Password must be at least 8 chars with uppercase, lowercase, number, and special character"
-                show_password_form = True
-                username_verified = username
-                email_verified = email
+            if not user:
+                error = "User not found"
             else:
-                get_db().update_user_password(username, new_password)
-                success = "Password reset successfully! You can now login."
+                username_verified = username
+                security_question = user.get("security_question", "")
+                show_security_form = True
+                
+                if user.get("email", "").strip().lower() != email.lower():
+                    error = "Not valid email"
+                elif user.get("security_answer", "").strip().lower() != security_answer:
+                    error = "Invalid security answer"
+                elif new_password != confirm_password:
+                    error = "Passwords do not match"
+                elif not is_strong_password(new_password):
+                    error = "Password must be at least 8 chars with uppercase, lowercase, number, and special character"
+                else:
+                    try:
+                        get_db().update_user_password(username, new_password)
+                        success = "Password reset successfully! You can now login."
+                        show_security_form = False
+                    except Exception as e:
+                        error = f"Error changing password: {str(e)}"
     
     return render_template("forgot_password.html", error=error, success=success, 
-                         show_email_form=show_email_form,
-                         show_password_form=show_password_form, username_verified=username_verified,
-                         email_verified=email_verified)
+                         show_security_form=show_security_form, 
+                         username_verified=username_verified,
+                         security_question=security_question)
 
 @app.route("/reset-password/<token>", methods=["GET", "POST"])
 def reset_password(token):
